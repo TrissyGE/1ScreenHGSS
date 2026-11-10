@@ -73,22 +73,43 @@ DEF_APPLY_BUTTON_MODE = 0x0201A5E9 @ the game's "L is A" conversion, 0 = none
 @   cfg_origin_menu_flag the offset of that object's "it is open" flag
 @   cfg_origin_cursor    the address of the selected entry
 @   cfg_origin_state     the offset of the battle scene's state in that object
-@   cfg_origin_submenu   the address of the flag that reads 1 while a battle
-@                        submenu - the bag, the party - owns the screen
+@   cfg_origin_battle_data address of the live battle engine's data pointer
+@   cfg_origin_prompt_cursor the address of the two-option prompt's own
+@                        cursor: the shared menu struct keeps one cursor per
+@                        screen, and the prompt is the fourth of them
+@   cfg_origin_cancel_flag the offset of the byte in the menu object that says
+@                        the command menu belongs to the player's SECOND
+@                        battler - the partner of a double battle, whose menu
+@                        shows CANCEL where RUN usually is
+@   cfg_origin_battle_vblank identifies the live battle renderer.
 @ All are 0 in an assembled (unconfigured) payload, which is the retail path.
 DEF_BATTLE_MODE = 0
 DEF_ORIGIN_MENU_PTR = 0
 DEF_ORIGIN_MENU_FLAG = 0
 DEF_ORIGIN_CURSOR = 0
 DEF_ORIGIN_STATE = 0
-DEF_ORIGIN_SUBMENU = 0
+DEF_ORIGIN_BATTLE_DATA = 0
+DEF_ORIGIN_PROMPT_CURSOR = 0
+DEF_ORIGIN_CANCEL_FLAG = 0
+DEF_ORIGIN_BATTLE_VBLANK = 0
 @ The highest command id the game writes: INFO, the entry above FIGHT. It has no
 @ word of its own, so the band simply disappears while the cursor is on it.
 ORIGIN_CURSOR_MAX = 4
-@ The battle scene's states, read out of the menu object: 1 while the command
-@ menu is up, 2 while the move list - the touch UI - has the screen.
+@ The battle scene's phases, read out of the menu object:
+@   1  the command menu is up
+@   2  the move list - the touch UI - has the screen
+@   3  target selection - on the same touch UI as the move list
+@   4  the game asks a question
+@ Closing a question clears its phase. Target selection can leave its phase
+@ behind, but frees and clears its target data at +0x3EC.
 ORIGIN_PHASE_COMMAND = 1
 ORIGIN_PHASE_MOVES = 2
+ORIGIN_PHASE_TARGET = 3
+ORIGIN_PHASE_ASK = 4
+ORIGIN_TARGET_DATA_OFF = 0x3EC
+ORIGIN_SUB_OVERLAY_OFF = 0x26C  @ overlay the battle engine currently drives
+ORIGIN_SUB_BAG_PARTY = 9
+ORIGIN_SUB_MOVE_SELECT = 12
 @ The colour of the band behind the selected command: palette 11 colour 12, the
 @ salmon the battle scene keeps there. BGR555 0x62FF is #f8b8c0.
 ORIGIN_BAND_COLOUR = 0x62FF
@@ -1025,11 +1046,16 @@ cfg_origin_menu_ptr: .word DEF_ORIGIN_MENU_PTR
 cfg_origin_menu_flag: .word DEF_ORIGIN_MENU_FLAG
 cfg_origin_cursor:  .word DEF_ORIGIN_CURSOR
 cfg_origin_state:   .word DEF_ORIGIN_STATE
-cfg_origin_submenu: .word DEF_ORIGIN_SUBMENU
+cfg_origin_battle_data: .word DEF_ORIGIN_BATTLE_DATA
 cfg_startmenu_state_off: .word DEF_STARTMENU_STATE_OFF
 cfg_startmenu_inhibit_off: .word DEF_STARTMENU_INHIBIT_OFF
 cfg_origin_oak_exec_orig: .word DEF_ORIGIN_OAK_EXEC_ORIG
 cfg_evolution_task_orig: .word DEF_EVOLUTION_TASK_ORIG
+cfg_origin_prompt_cursor: .word DEF_ORIGIN_PROMPT_CURSOR
+cfg_origin_cancel_flag: .word DEF_ORIGIN_CANCEL_FLAG
+cfg_origin_battle_vblank: .word DEF_ORIGIN_BATTLE_VBLANK
+cfg_origin_evo_get_mon: .word 0
+cfg_origin_evo_done: .word 0
 
 @ The emulated tests drive these words directly - they write the game's key
 @ state into the pad word, point the app callback at a test structure and read
@@ -1043,12 +1069,15 @@ cfg_evolution_task_orig: .word DEF_EVOLUTION_TASK_ORIG
     .global  cfg_open_list, cfg_string_width, cfg_setup_native, cfg_tutor_exec_orig
     .global  cfg_orig_loop_fn, cfg_read_keys_orig, cfg_apply_button_mode, cfg_battle_mode
     .global  cfg_origin_menu_ptr, cfg_origin_menu_flag, cfg_origin_cursor, cfg_origin_state
-    .global  cfg_origin_submenu, cfg_startmenu_state_off, cfg_startmenu_inhibit_off
+    .global  cfg_origin_battle_data, cfg_startmenu_state_off, cfg_startmenu_inhibit_off
     .global  cfg_origin_oak_exec_orig, cfg_evolution_task_orig
+    .global  cfg_origin_prompt_cursor, cfg_origin_cancel_flag, cfg_origin_battle_vblank
+    .global  cfg_origin_evo_get_mon, cfg_origin_evo_done
     .global  pad_held, pad_new, menu_swapped, last_app
     .global  bt_phase, bt_menu_last, bt_manual, bt_system
     .global  bt_drawn, bt_lock, bt_origin, bt_origin_cur
     .global  bt_origin_obj, bt_origin_flag, bt_origin_state, bt_origin_route
+    .global  bt_origin_img, bt_origin_set
     .global  sm_drawn, sm_shown, list_ctrl, list_drawn
     .global  list_rect, list_hold, wl_ret, wl_last
     .global  bt_band, evo_band, lr_state, lr_pending
@@ -1094,6 +1123,9 @@ bt_origin_obj:  .word 0         @ ...and the menu object it found
 bt_origin_flag: .word -1        @ ...and the flag byte inside it
 bt_origin_state: .word -1       @ ...and the battle scene's state in it
 bt_origin_route: .word 0        @ 1 while the hook holds the screen for the touch UI
+bt_origin_img:  .word -1       @ ...and the label image the menu calls for
+bt_origin_set:  .word 0        @ ...and the command menu's image set
+bt_origin_mask: .word 0        @ ...and which message ids the menu's items had
 oak_drawn:      .word -1        @ prompt image in Oak's dialog box, -1 = none
 oak_origin_drawn: .word -1      @ the same for Origin's Oak app, which is a
                                 @ different app and must not take the retail
@@ -1627,14 +1659,21 @@ phase_running:
 @   cfg_origin_menu_ptr   the address of a pointer to the battle's menu object,
 @                         which is 0 while there is no menu at all
 @   object + flag         that object's own "it is open" flag
-@   cfg_origin_state      the offset of the battle scene's state in that
-@                         object: 0 outside a battle, 1 at the command menu,
-@                         2 while the move list has the screen
+@   cfg_origin_state      the offset of the battle scene's phase in that
+@                         object: 0 while nothing of the battle's is on the
+@                         screen, 1 at the command menu, 2 at the move list,
+@                         3 at the target grid, 4 while the game asks a question
 @   cfg_origin_cursor     the address of the selected entry, which the game
 @                         writes as its own command id:
 @                         0 FIGHT, 1 BAG, 2 POKEMON, 3 RUN, 4 INFO
-@   cfg_origin_submenu    the address of the flag that reads 1 while a battle
-@                         submenu - the bag, the party - owns the screen
+@   cfg_origin_prompt_cursor the address of the two-option prompt's cursor,
+@                         which the game keeps in its own slot of the shared
+@                         menu struct: 0 YES, 1 NO
+@   cfg_origin_cancel_flag the offset of the byte that says the command menu
+@                         belongs to the player's second battler - the partner
+@                         of a double battle, who is shown CANCEL instead of
+@                         RUN
+@   cfg_origin_battle_data the address of the live battle engine's data pointer
 @
 @ The game moves that cursor with the D-Pad and confirms it with A, and it
 @ draws its own touch buttons on the bottom screen - so the hook only MIRRORS
@@ -1661,6 +1700,10 @@ OneScreen_OriginBattle:
     cmp     r0, #0
     beq     ob_done                 @ a retail build: nothing to do here
 
+    bl      OneScreen_OriginBattleScene
+    cmp     r0, #0
+    beq     ob_release
+
     @ The routing is the hook's business from the main loop: the game sets
     @ POWCNT1 itself whenever it opens one of those screens, so ours has to be
     @ re-applied every frame - but the WORDS are drawn from the battle app's
@@ -1671,6 +1714,34 @@ OneScreen_OriginBattle:
     bl      OneScreen_OriginRoute
 ob_done:
     pop     {r4, pc}
+ob_release:
+    @ A new scene owns the screens. The submenu byte can still be 1 after a
+    @ catch or escape, including while the battle overlay runs its exit
+    @ callback for evolution. Leave the new scene's routing in place.
+    ldr     r1, =bt_origin_route
+    str     r0, [r1]
+    pop     {r4, pc}
+    .align  2
+    .pool
+
+@ Whether the battle renderer still owns the scene, including its touch UI.
+    .thumb_func
+OneScreen_OriginBattleScene:
+    ldr     r0, =cfg_origin_battle_vblank
+    ldr     r0, [r0]
+    cmp     r0, #0
+    beq     ob_scene_done
+    ldr     r1, =cfg_app_callback
+    ldr     r1, [r1]
+    ldr     r1, [r1]
+    subs    r0, r1, r0
+    bne     ob_scene_inactive
+    movs    r0, #1
+    bx      lr
+ob_scene_inactive:
+    movs    r0, #0
+ob_scene_done:
+    bx      lr
     .align  2
     .pool
 
@@ -1679,61 +1750,97 @@ ob_done:
 @
 @ What the battle is showing right now. Returns:
 @
-@   r0 = 1 when the command menu is up - the words belong on the scene
+@   r0 = 1 when a menu is up - the words belong on the scene
 @   r1 = 1 when the battle's touch UI wants the screen - the move list, the
 @        bag, the party - so the screen goes to engine B
 @
-@ and fills the bt_origin* words with what it saw, which is also how the
-@ hook tells "no battle here" from "a battle we do not understand".
+@ and fills the bt_origin* diagnostic words with what it saw.
+@ bt_origin_img holds the label image the menu calls for: the command menu's
+@ own picture - the CANCEL variant, when the game puts CANCEL where RUN is -
+@ or the Oui/Non pair of a two-option prompt.
 @
-@ The order of the questions matters: the battle's own state is asked before
-@ the submenu flag, because that flag keeps its value after an item is used -
-@ see the comment on the first read below.
+@ The game says what is on the screen itself. The menu object carries a phase
+@ byte, and the shared menu struct at the battle's root carries one cursor per
+@ screen:
+@
+@   phase 0  nothing of the battle's is on the screen
+@   phase 1  the command menu is up; its cursor is the first slot
+@   phase 2  the move list - the touch UI - has the screen
+@   phase 3  the native target grid is on the touch UI
+@   phase 4  the game asks a question: the trainer's "will you switch your
+@            Pokémon?", a two-option prompt whose cursor is the fourth slot
+@
+@ When the menu object is absent, the battle's loaded sub-overlay decides.
 @ ---------------------------------------------------------------------------
     .thumb_func
 OneScreen_OriginProbe:
     push    {r4, r5, r6, lr}
-    movs    r4, #0
+    movs    r4, #0                  @ the kind of menu
     movs    r5, #0                  @ the words
     movs    r6, #0                  @ the routing
     ldr     r0, =bt_origin
     str     r4, [r0]                @ 0: this build's own battle engine
+    ldr     r0, =bt_origin_img
+    movs    r1, #0
+    mvns    r1, r1                  @ -1: no image yet
+    str     r1, [r0]
 
-    @ The menu object comes first, because while the battle still has one, its
-    @ own state says what is on the screen. The submenu flag - the byte above
-    @ the pointer - is only the fallback for the screens that take the pointer
-    @ away with them, and it STAYS SET after an item is used: the game throws
-    @ the ball with the flag still up, so a probe that believes the flag first
-    @ keeps the screen on engine B and the battle scene never comes back.
+    @ While the battle owns the menu object, its phase says what is on screen.
     ldr     r0, =cfg_origin_menu_ptr
     ldr     r0, [r0]                @ where the game keeps the pointer
     ldr     r0, [r0]                @ the menu object, or 0
     cmp     r0, #0
     beq     ob_no_object
-    movs    r4, r0
+    movs    r4, r0                  @ the menu object
+    ldr     r1, =ORIGIN_TARGET_DATA_OFF
+    bl      OneScreen_MainRamRange
+    cmp     r0, #0
+    beq     ob_no_battle
     ldr     r1, =bt_origin_obj
     str     r4, [r1]
 
-    @ The battle scene's state, in the same object: 0 while no battle menu is up
-    @ - the turn is running, an item is being used - 1 at the command menu, 2
-    @ while the move list or the party has the screen. Without it the menu
-    @ system's own "it is open" flag would also answer for every other screen
-    @ that uses it.
+    @ The phase: what the battle is showing.
     ldr     r0, =cfg_origin_state
     ldr     r0, [r0]
     ldrb    r0, [r4, r0]
     ldr     r1, =bt_origin_state
     str     r0, [r1]
-    cmp     r0, #0
-    beq     ob_no_battle            @ no battle menu: the scene keeps the screen
 
-    @ The move list is up: the battle's touch UI has the screen, and the scene
-    @ goes down with the words still on it - the same picture the retail build
+    @ A question. The answer is the prompt's own cursor: the shared menu
+    @ struct keeps one cursor per screen, and the prompt is the fourth of
+    @ them. 0 YES, 1 NO.
+    cmp     r0, #ORIGIN_PHASE_ASK
+    bne     ob_command
+    ldr     r0, =cfg_origin_prompt_cursor
+    ldr     r0, [r0]
+    cmp     r0, #0
+    beq     ob_ask_stale             @ no cursor to read: draw nothing
+    ldrb    r0, [r0]
+    cmp     r0, #1
+    bhi     ob_ask_stale
+    ldr     r1, =LABEL_GEO_YN
+    lsls    r1, r1, #4
+    orrs    r0, r1
+    ldr     r1, =bt_origin_img
+    str     r0, [r1]
+    movs    r4, #7                  @ 7: a two-option prompt is up
+    movs    r5, #1                  @ the prompt: the words go onto the scene
+    b       ob_note
+
+ob_command:
+    @ The move list: the battle's touch UI has the screen, and the scene goes
+    @ down with the words still on it - the same picture the retail build
     @ leaves on the bottom screen.
     cmp     r0, #ORIGIN_PHASE_MOVES
-    bne     1f
-    movs    r6, #1
-1:  ldr     r0, =cfg_origin_menu_flag
+    beq     ob_moves
+    cmp     r0, #ORIGIN_PHASE_TARGET
+    beq     ob_target
+    cmp     r0, #ORIGIN_PHASE_COMMAND
+    bne     ob_no_battle
+
+    @ The command menu. It has to be open as well: the phase can outlive the
+    @ menu it belongs to.
+    ldr     r0, =cfg_origin_menu_flag
     ldr     r0, [r0]
     ldrb    r0, [r4, r0]            @ the object's own "it is open" flag
     ldr     r1, =bt_origin_flag
@@ -1751,28 +1858,67 @@ OneScreen_OriginProbe:
     cmp     r0, #ORIGIN_CURSOR_MAX
     bhi     ob_bad_cursor
 
-    movs    r5, #1                  @ the command menu: the words go onto the scene
+    @ The word set. The game says which one it wants itself: it writes a byte
+    @ into the menu object when it creates the command menu, and that byte is
+    @ not zero when the menu belongs to the player's SECOND battler - the
+    @ partner of a double battle, who cannot run and is shown CANCEL instead.
+    ldr     r0, =cfg_origin_cancel_flag
+    ldr     r0, [r0]
+    cmp     r0, #0
+    beq     ob_words
+    ldrb    r0, [r4, r0]
+    cmp     r0, #0
+    beq     ob_words
+    movs    r0, #LABEL_GEO_CANCEL
+    b       ob_set
+ob_words:
+    movs    r0, #0                  @ FIGHT / BAG / POKEMON / RUN
+ob_set:
+    ldr     r1, =bt_origin_set
+    str     r0, [r1]
+    lsls    r0, r0, #4
+    ldr     r1, =bt_origin_cur
+    ldr     r1, [r1]
+    orrs    r0, r1
+    ldr     r1, =bt_origin_img
+    str     r0, [r1]
     movs    r4, #6                  @ 6: the command menu is up
+    movs    r5, #1                  @ the words go onto the scene
     b       ob_note
 
-ob_no_object:
-    @ The menu object is gone: a full-screen battle app - the options, the
-    @ info, the bag - may have taken the screen with it, and it says so with
-    @ the flag that lives in the battle's own struct, one word above the
-    @ command-menu pointer. It is a BYTE: the word itself is something else
-    @ and reads 0x0004EF00 in the overworld. This flag is only consulted here,
-    @ where there is no state to read: with the object back in place it keeps
-    @ its old value, and the state is the better answer.
-    ldr     r0, =cfg_origin_submenu
-    ldr     r0, [r0]
-    ldrb    r0, [r0]
+ob_target:
+    ldr     r0, =ORIGIN_TARGET_DATA_OFF
+    ldr     r0, [r4, r0]
     cmp     r0, #0
-    bne     ob_submenu
+    beq     ob_no_battle
+ob_moves:
+    movs    r6, #1
+    b       ob_note
+ob_ask_stale:
+    movs    r4, #5
+    b       ob_note
+ob_no_object:
+    @ The battle frees the menu object for full-screen sub-apps. The active
+    @ overlay (written by ov14 at 0x0221593A) detects these even when the old
+    @ submenu byte never changes, as when the player accepts a switch prompt.
+    ldr     r0, =cfg_origin_battle_data
+    ldr     r0, [r0]
+    ldr     r4, [r0]
+    movs    r0, r4
+    ldr     r1, =ORIGIN_SUB_OVERLAY_OFF
+    bl      OneScreen_MainRamRange
+    cmp     r0, #0
+    beq     ob_no_battle
+    ldr     r0, =ORIGIN_SUB_OVERLAY_OFF
+    ldr     r0, [r4, r0]
     movs    r4, #2
+    cmp     r0, #ORIGIN_SUB_BAG_PARTY
+    beq     ob_submenu
+    cmp     r0, #ORIGIN_SUB_MOVE_SELECT
+    beq     ob_submenu
     b       ob_note
 ob_submenu:
-    @ The bag or the party owns the screen: it is drawn on engine B, and the
-    @ words belong to the command menu, which this is not.
+    @ The battle's full-screen UI is drawn on engine B.
     movs    r6, #1
     b       ob_note
 ob_no_battle:
@@ -1808,42 +1954,41 @@ ob_note:
     .thumb_func
 OneScreen_OriginLabels:
     push    {r4, lr}
-    ldr     r0, =cfg_battle_mode
-    ldr     r0, [r0]
+    bl      OneScreen_OriginBattleScene
     cmp     r0, #0
-    beq     ol_done                 @ a retail build: the retail path draws them
+    beq     ol_reset                @ the native battle window is gone
 
     bl      OneScreen_OriginProbe
     cmp     r0, #0
-    beq     ol_closed                @ no command menu: the words come down
+    beq     ol_closed                @ no menu: the words come down
 
-    @ The cursor, as the game wrote it: bt_origin_cur holds the command id
-    @ itself (0 FIGHT, 1 BAG, 2 POKEMON, 3 RUN, 4 INFO), not the address of
-    @ it - the probe already read it. It is the image code as well, because the
-    @ command words sit in set 0 and the game's ids are that set's order.
-    @ (Reading a byte through it a second time is what used to happen here:
-    @ that read from address 0, aborted the ARM9 and froze the battle.)
-    ldr     r0, =bt_origin_cur
-    ldr     r0, [r0]
-    movs    r4, r0                  @ the image code: set 0, index = the cursor
+    ldr     r0, =bt_origin_img
+    ldr     r0, [r0]                  @ pass the image code, not its address
     ldr     r1, =bt_drawn
-    str     r4, [r1]
+    str     r0, [r1]
     bl      OneScreen_BattleMenu
     bl      OneScreen_OriginBand
     pop     {r4, pc}
 
 ol_closed:
-    @ The menu is gone: take the words down, once.
+    @ The menu is gone: take the words down, once. The box that is up is the
+    @ one the last image was drawn in - the command words and the Oui/Non pair
+    @ are different boxes.
     ldr     r1, =bt_drawn
     ldr     r2, [r1]
-    adds    r2, r2, #1
+    adds    r3, r2, #1
     beq     ol_done                 @ -1: nothing of ours on screen
-    movs    r2, #0
-    mvns    r2, r2
-    str     r2, [r1]
-    movs    r0, #0
+    movs    r3, #0
+    mvns    r3, r3
+    str     r3, [r1]
+    lsrs    r0, r2, #4              @ the set that is up
     bl      OneScreen_BattleWipe
     bl      OneScreen_BattleMenu
+    b       ol_done
+ol_reset:
+    ldr     r1, =bt_drawn
+    mvns    r0, r0
+    str     r0, [r1]
 ol_done:
     pop     {r4, pc}
     .align  2
@@ -3064,6 +3209,25 @@ OneScreen_EvolutionTask:
     movs    r0, r4                  @ preserve the callback ABI defensively
     movs    r1, r5
     pop     {r3, r4, r5, pc}
+    .align  2
+    .pool
+
+@ Origin checks all six party slots for an evolution even in a smaller party.
+@ Called only from that scan. R0 is Party *, R1 is the slot. An absent slot
+@ ends the scan via its own "no evolution" epilogue.
+    .global OneScreen_OriginEvolutionPartyMon
+    .thumb_func
+OneScreen_OriginEvolutionPartyMon:
+    ldr     r2, [r0, #4]            @ PartyCore.curCount
+    cmp     r1, r2
+    bhs     origin_evo_done
+    ldr     r3, =cfg_origin_evo_get_mon
+    b       origin_evo_jump
+origin_evo_done:
+    ldr     r3, =cfg_origin_evo_done
+origin_evo_jump:
+    ldr     r3, [r3]
+    bx      r3
     .align  2
     .pool
 

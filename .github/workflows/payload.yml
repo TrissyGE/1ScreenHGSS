@@ -66,7 +66,7 @@ jobs:
       - name: Rebuild the Origin payload
         run: |
           python tools/make_payload.py --dest payload_origin \
-            --load-addr 0x01FF8FC0 --defsym LABEL_BLOB_SIZE=12288
+            --load-addr 0x01FF8FC0 --defsym LABEL_BLOB_SIZE=16384
 
       - name: The committed Origin payload matches src/hook.s
         run: git diff --exit-code -- onescreen/payload_origin

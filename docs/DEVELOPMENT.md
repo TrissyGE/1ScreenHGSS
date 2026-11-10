@@ -40,7 +40,7 @@ booted to a white screen:
 
 ```bash
 python tools/make_payload.py --dest payload_origin \
-    --load-addr 0x01FF8FC0 --defsym LABEL_BLOB_SIZE=12288
+    --load-addr 0x01FF8FC0 --defsym LABEL_BLOB_SIZE=16384
 ```
 
 The patcher picks the payload by the ROM it is given, and `onescreen/origin.py` holds

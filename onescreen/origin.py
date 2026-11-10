@@ -33,7 +33,7 @@ that found them is `tools/probe_origin.py` in this project's parent folder.
 
 import struct
 
-from . import labels, regions, themes
+from . import inject, labels, regions, themes
 
 ARM9_RAM = 0x02000000
 
@@ -106,6 +106,17 @@ BOOT_INIT_SITE = 0x0201AA9A
 # --- overlays ----------------------------------------------------------------
 FIELD_OVERLAY = 1
 BATTLE_OVERLAY = 14
+# Live while the battle renderer owns either engine. The battle template's
+# exit callback can run an evolution with this renderer already torn down.
+BATTLE_VBLANK = 0x02227895
+BATTLE_VBLANK_SIG = bytes.fromhex("10b5041ca06be1f58bfdf9f555fae5f58ff9")
+
+# The post-battle scan calls Party_GetMonByIndex for all six slots. It must
+# leave the loop when it reaches the end of the occupied party.
+EVOLUTION_PARTY_CALL = 0x02214DFA
+EVOLUTION_PARTY_GET_MON = 0x0207339D
+EVOLUTION_SCAN_DONE = 0x02214E2F
+EVOLUTION_SCAN_TAIL = bytes.fromhex("0629e4db0020f8bd")
 # The Pokédex app, the PC box and the flight map. hg-engine renumbered the
 # overlays, so a retail number means a different app here - the numbers below
 # were found by data, not by guesswork: hg-engine rewrote the overlay CODE but
@@ -307,19 +318,32 @@ MENU_FLAG = 0x1B1
 MENU_STATE = 0x3D0
 CURSOR = 0x02255B9C
 
-# The same struct holds the flag that says a battle submenu - the bag, the
-# party - owns the screen, at +0x00. It is a BYTE: the word it sits in holds
-# something else entirely and reads 0x0004EF00 in the overworld, 0x00000000 in
-# the battle, 0x00000001 while the bag or the party is up. The game clears the
-# command-menu pointer at the same time, so this flag is the only thing left
-# that says "a battle is still running, and its touch UI has the screen".
+# The live engine data holds the active sub-overlay at +0x26C. The native
+# switch routine at 0x02215914 stores it after loading the overlay.
+BATTLE_DATA_PTR = 0x02255BAC
+
+# Phases 1, 2, 3 and 4 are command, move selection, target selection and a
+# two-option question. See src/hook.s for the native menu lifetime checks.
+
+# The shared menu struct at 0x02255B90 keeps one cursor per screen, four bytes
+# apart. Screen 1 is the command menu - the hook already reads its cursor -
+# and screen 4 is the two-option prompt: the trainer's "will you switch your
+# Pokémon?". Its cursor is the answer, 0 for YES and 1 for NO.
 #
-# The battle's state byte says the same about the move list, which the game
-# draws on engine B as well: 1 at the command menu, 2 while the move list is
-# up. The retail build hands the screen over to those screens as soon as they
-# open; Origin's battle overlay holds no display-routing site at all, so the
-# hook has to do it here.
-MENU_SUBMENU = 0x02255B90
+# Measured in this ROM's own battle code (overlay 14): the ask routine at
+# 0x02213040 clears it, the prompt worker at 0x022131A4 writes the answer into
+# it, and the prompt's own key handler at 0x02213118 moves it.
+PROMPT_CURSOR = 0x02255BA8
+
+# The menu object has a byte that says which of the player's two battlers the
+# command menu belongs to. The game writes it when it creates the menu: it is
+# not zero when the menu is the second battler's - the partner of a double
+# battle, who cannot run and is shown CANCEL where RUN usually is. That is
+# this build's answer to the retail BattleInput.cancelShown.
+#
+# Measured in overlay 14: the command menu's creator at 0x0221429C stores it,
+# and the only reader, 0x022144C4, picks a different battle message for it.
+CANCEL_FLAG = 0x1B3
 
 
 def read_pool_word(arm9: bytes, addr: int) -> int:
@@ -625,6 +649,18 @@ def patch_oak_exec(ov_data, overlays, meta, log=print, take_over=True):
     return [OAK_APP_OVERLAY]
 
 
+def patch_evolution_party(data, base, target):
+    """Guard the native evolution scan's party lookup in overlay 14."""
+    call = EVOLUTION_PARTY_CALL - base
+    tail = (EVOLUTION_SCAN_DONE & ~1) - base - 4
+    if (call < 0 or tail < 0
+            or not data.startswith(inject.thumb_bl(EVOLUTION_PARTY_CALL,
+                                                   EVOLUTION_PARTY_GET_MON), call)
+            or not data.startswith(EVOLUTION_SCAN_TAIL, tail)):
+        raise ValueError("Origin's post-battle evolution scan does not match")
+    data[call:call + 4] = inject.thumb_bl(EVOLUTION_PARTY_CALL, target)
+
+
 def resolve(arm9: bytearray, overlays, meta, log=print,
             theme=themes.DEFAULT_THEME, take_over=True,
             battle_take_over=True):
@@ -649,6 +685,9 @@ def resolve(arm9: bytearray, overlays, meta, log=print,
     ov14 = overlays.get(BATTLE_OVERLAY)
     if ov1 is None or ov14 is None:
         raise ValueError("the field or the battle overlay is missing")
+    vblank_off = (BATTLE_VBLANK & ~1) - ov14.ramAddress
+    if vblank_off < 0 or not ov14.data.startswith(BATTLE_VBLANK_SIG, vblank_off):
+        raise ValueError("Origin's battle VBlank callback does not match the supported build")
 
     # The battle's OverlayManagerTemplate, read straight out of the ARM9. Its
     # init/exec/exit are thin ARM9 wrappers, as in the retail build, so the
@@ -707,7 +746,14 @@ def resolve(arm9: bytearray, overlays, meta, log=print,
         "origin_menu_flag": MENU_FLAG,
         "origin_cursor": CURSOR,
         "origin_state": MENU_STATE,
-        "origin_submenu": MENU_SUBMENU,
+        "origin_battle_data": BATTLE_DATA_PTR,
+        # The two-option prompt's own cursor, and the byte that says the
+        # command menu belongs to the player's second battler.
+        "origin_prompt_cursor": PROMPT_CURSOR,
+        "origin_cancel_flag": CANCEL_FLAG,
+        "origin_battle_vblank": BATTLE_VBLANK,
+        "origin_evo_get_mon": EVOLUTION_PARTY_GET_MON,
+        "origin_evo_done": EVOLUTION_SCAN_DONE,
         # The start menu's struct, four bytes further on than in retail.
         "startmenu_state_off": START_MENU_STATE_OFF,
         "startmenu_inhibit_off": START_MENU_INHIBIT_OFF,

@@ -91,21 +91,11 @@ GRID_BASE_COL = 13
 WIN_STRIDE = 27
 WIN_BASE_TILE = 31
 
-# Origin HeartGold's command box - see ORIGIN_BOX below. Its battle prompt is
-# ONE line where retail's wraps onto two, and it sits on the window's FIRST
-# text line, so the second one is free. The commands still go in the game's own
-# cursor arrangement - FIGHT across the top, BAG/RUN/POKEMON along the bottom -
-# in the window's right-hand columns, exactly where retail puts them: the hook
-# mirrors the game's cursor, and the D-Pad moves between the rows, so a single
-# row of four would make "up" jump sideways.
-#
-# The box is therefore retail's, down to the tile it starts at: the window's
-# content rows are 27 tiles apart, two of them to a text line, so the box's
-# first row is the prompt's line and its third and fourth are the free line.
-ORIGIN_COLS = GRID_COLS
-ORIGIN_ROWS = GRID_ROWS
-ORIGIN_BASE_COL = GRID_BASE_COL
-ORIGIN_BASE_TILE = WIN_BASE_TILE
+# Origin fits the entire question on its first line. Reserve that line for
+# the game, including long Pokémon names. Commands occupy the second line.
+ORIGIN_COLS = WIN_STRIDE
+ORIGIN_ROWS = GRID_ROWS // 2
+ORIGIN_BASE_TILE = WIN_BASE_TILE + ORIGIN_ROWS * WIN_STRIDE
 
 # The yes/no prompt gets its own, much smaller box. It cannot reuse the command
 # grid: the blit paints its whole area, including the paper between the words, so
@@ -434,12 +424,8 @@ class Box:
     columns, and the commands go there in the game's own 2x3 cursor arrangement
     (FIGHT across the top, BAG/RUN/POKEMON along the bottom).
 
-    Origin HeartGold prints the prompt on ONE line, on the window's second
-    line, so its third line is free - but its command box is the same shape as
-    retail's, in the same right-hand columns, because its cursor moves in the
-    same grid: FIGHT across the top of the box, BAG/RUN/POKEMON along the
-    bottom. The game's own touch buttons on the bottom screen are arranged the
-    same way, so the words on the top screen mirror what the player presses.
+    Origin HeartGold prints the entire question on the first line. Its
+    commands share the second line, below the Pokémon's full name.
     """
 
     __slots__ = ("cols", "rows", "base_col", "base_tile", "layout")
@@ -463,8 +449,7 @@ class Box:
 
 
 RETAIL_BOX = Box(GRID_COLS, GRID_ROWS, GRID_BASE_COL, WIN_BASE_TILE, "retail")
-ORIGIN_BOX = Box(ORIGIN_COLS, ORIGIN_ROWS, ORIGIN_BASE_COL, ORIGIN_BASE_TILE,
-                 "origin")
+ORIGIN_BOX = Box(ORIGIN_COLS, ORIGIN_ROWS, 0, ORIGIN_BASE_TILE, "origin")
 
 BLOB_MAGIC = b"1SLB"
 
@@ -867,6 +852,13 @@ def _layout_row(font: Font, items, cell_w):
         out.append((x, 0, codes, (x - gap // 2, 0, w + gap, ROW_H)))
         x += w + gap
     return out
+
+
+def _layout_origin_commands(font, commands, width):
+    """Keep BAG, RUN/CANCEL and POKéMON in order, with FIGHT near the centre."""
+    fight, bag, pokemon, run = commands
+    bag, fight, run, pokemon = _layout_row(font, [bag, fight, run, pokemon], width)
+    return [fight, bag, pokemon, run]
 
 
 def _render(font: Font, placed, selected, width=CELL_W, height=CELL_H,
@@ -1525,12 +1517,8 @@ def build(rom, log=print, theme=themes.DEFAULT_THEME, overlays=None, mf=None,
     else:
         # Origin's command menu has a fifth position - INFO, above FIGHT - which
         # the game's cursor can sit on. It has no word of its own, so that choice
-        # gets an empty rectangle and the picture is simply not banded.
-        #
-        # The four words go in the same arrangement as retail's, though: the game
-        # moves its cursor in the same 2x3 grid, so a single row of four would
-        # make "up" jump sideways.
-        command_layout = _layout(font, labels)
+        # gets an empty rectangle.
+        command_layout = _layout_origin_commands(font, labels, box.width)
         command_choices = 5
     sets = [
         (command_layout, command_choices, box.width, box.cols, box.rows, True),
@@ -1569,7 +1557,8 @@ def build(rom, log=print, theme=themes.DEFAULT_THEME, overlays=None, mf=None,
         return out
 
     extra_layouts = {
-        "cancel": lambda: _layout(font, words(CANCEL_MSGS)),
+        "cancel": lambda: (_layout(font, words(CANCEL_MSGS)) if box.layout == "retail"
+                           else _layout_origin_commands(font, words(CANCEL_MSGS), box.width)),
         "safari": lambda: _layout(font, words(SAFARI_MSGS)),
         "bug": lambda: _layout(font, words(BUG_MSGS)),
         "park": lambda: _layout_sparse(font, *words(PARK_MSGS)),
@@ -1577,20 +1566,31 @@ def build(rom, log=print, theme=themes.DEFAULT_THEME, overlays=None, mf=None,
     }
     extra_missing = []
     for name in EXTRA_GEOS:
-        if box.layout != "retail":
-            # Origin runs its own battle engine with its own menus; the retail
-            # special command menus are not built for it.
+        if box.layout != "retail" and name != "cancel":
+            # Origin runs its own battle engine with its own menus. The only
+            # retail command menu that is one of them is the CANCEL variant:
+            # the game puts CANCEL where RUN usually is for the second
+            # battler of a double battle, and it says so in the menu items.
             geometries.append((None, battle_rows))
             extra_missing.append(f"{name} (not a retail menu)")
             continue
         try:
             placed = extra_layouts[name]()
-            _banded_set(font, placed, CELL_W, GRID_COLS)
+            if box.layout == "retail":
+                _banded_set(font, placed, CELL_W, GRID_COLS)
+                spec = (placed, 4, CELL_W, GRID_COLS, GRID_ROWS, True)
+            else:
+                # Origin's command menu has a fifth choice - INFO, which has no
+                # word of its own - and the CANCEL variant has the same shape.
+                _banded_set(font, placed, box.width, box.cols, box.rows,
+                            command_choices)
+                spec = (placed, command_choices, box.width, box.cols,
+                        box.rows, True)
         except (LabelError, IndexError, KeyError) as exc:
             extra_missing.append(f"{name} ({exc})")
             geometries.append((None, battle_rows))
             continue
-        sets.append((placed, 4, CELL_W, GRID_COLS, GRID_ROWS, True))
+        sets.append(spec)
         geometries.append((len(sets) - 1, battle_rows))
 
     if oak_gender_rows is not None:

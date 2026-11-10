@@ -78,7 +78,7 @@ CONFIG_FIELDS = ("pad_held", "app_callback", "field_callback",
                  # word and the addresses the hook reads its command menu
                  # from. All zero in a retail build.
                  "battle_mode", "origin_menu_ptr", "origin_menu_flag",
-                 "origin_cursor", "origin_state", "origin_submenu",
+                 "origin_cursor", "origin_state", "origin_battle_data",
                  # The start menu's own struct, whose offsets a build that grew
                  # that struct moves: the retail values are the defaults.
                  "startmenu_state_off", "startmenu_inhibit_off",
@@ -88,7 +88,12 @@ CONFIG_FIELDS = ("pad_held", "app_callback", "field_callback",
                  # The evolution scene's main-queue task. The hook calls the
                  # game's own task through this, and a ROM whose ARM9 moved the
                  # evolution code has it somewhere else.
-                 "evolution_task_orig")
+                 "evolution_task_orig",
+                 # The two-option prompt's own cursor, and the byte in the menu
+                 # object that says the command menu belongs to the player's
+                 # second battler - the CANCEL variant of the words.
+                 "origin_prompt_cursor", "origin_cancel_flag",
+                 "origin_battle_vblank", "origin_evo_get_mon", "origin_evo_done")
 
 
 def fill_config(payload: bytes, config_addr: int, load_addr: int,

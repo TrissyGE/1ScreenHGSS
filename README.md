@@ -163,18 +163,18 @@ between the two freely.
 Origin HeartGold is not a retail HeartGold build: it is a Chinese hack
 rebuilt over the *Japanese* HeartGold on its own engine (`hg-engine`), with 120
 overlays instead of 129, its own battle engine and its own main loop. The
-patcher recognises it by its game code and checks every anchor it needs before
-it writes anything.
+patcher identifies the supported v4.0.3 EN 1.0.0-rc8 ROM by SHA-1 and verifies
+the code it patches.
 
 What is ported and **play-tested** so far:
 
-- the **battle command menu**: FIGHT / BAG / RUN / POKéMON are drawn on the top screen,
-  in the window's own message box, laid out the way the game's cursor moves, and the band
-  follows the D-Pad — the same result the retail build gives, down to the pixel. Origin's
-  own touch buttons stay on the bottom screen, as in the retail build. The move list, the
-  bag and the party take the top screen while they are open, as in retail does — and the
-  scene comes back to the top when they close, including after an item is used, which
-  used to leave the screen stuck on the ball's throw animation.
+- the **battle command menu**: The commands fit below the full question, and
+  the highlight follows the D-Pad. In doubles, the second Pokémon gets
+  **CANCEL** in place of **RUN**. The move list, target grid, bag and party
+  appear on top while active, and the battle scene returns when they close.
+- **Battle questions**: The switch prompt and the move-learning questions
+  mirror the native Yes / No selection. Accepting opens the relevant Pokémon
+  or move list on the top screen.
 - the **overworld menu** (X): the panel is drawn on the top screen, with the same words in
   the same cells as in the retail build.
 - the **field questions**: a binary prompt (YES / NO) is mirrored into the world's message
@@ -207,6 +207,8 @@ What is ported and **play-tested** so far:
   byte for byte, at other addresses. The patcher therefore takes over the task
   the way the retail build does, and the YES / NO prompt of the move-learning
   screen comes up on the top screen with the band on the selected answer.
+  Evolution stays on top after a win, a catch or an escape. The post-battle
+  evolution scan stops at the last occupied party slot.
 
 The **overlay numbers are not the retail ones**: hg-engine renumbered the
 overlays, so the Pokédex is overlay 5 here (retail: 18), the flight map is

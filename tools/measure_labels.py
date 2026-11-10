@@ -7,6 +7,7 @@ this script how big the blob really is and reserves that much (rounded up).
     py tools/measure_labels.py <rom> <out.txt>
 """
 
+import hashlib
 import pathlib
 import sys
 
@@ -18,14 +19,19 @@ from onescreen import labels, origin
 
 
 def blob_size(rom_path):
-    rom = ndspy.rom.NintendoDSRom(pathlib.Path(rom_path).read_bytes())
-    mf = None
-    box = None
-    if origin.SHA1 in __import__("hashlib").sha1(
-            pathlib.Path(rom_path).read_bytes()).hexdigest():
-        mf = labels.MessageFiles(origin.MSG_FILES, origin.FONT_FILE)
-        box = labels.ORIGIN_BOX
-    blob = labels.build(rom, log=lambda *a, **k: None, mf=mf, box=box)
+    data = pathlib.Path(rom_path).read_bytes()
+    rom = ndspy.rom.NintendoDSRom(data)
+    overlays = rom.loadArm9Overlays()
+    origin_options = {}
+    if hashlib.sha1(data).hexdigest() == origin.SHA1:
+        origin_options = dict(
+            mf=labels.MessageFiles(origin.MSG_FILES, origin.FONT_FILE),
+            box=labels.ORIGIN_BOX,
+            layout_overlays=origin.touch_layout_overlays(overlays),
+            oak_gender_rows=origin.OAK_GENDER_ROWS,
+        )
+    blob = labels.build(rom, log=lambda *a, **k: None, overlays=overlays,
+                        **origin_options)
     return len(blob)
 
 

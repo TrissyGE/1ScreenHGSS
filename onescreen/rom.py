@@ -147,6 +147,12 @@ def patch(rom_bytes: bytes, log=print, auto_battle=True,
             extra_overlays = origin.patch_oak_exec(ov_data, overlays, meta, log=log)
             if not extra_overlays:
                 values["origin_oak_exec_orig"] = 0
+            battle_ov = origin.BATTLE_OVERLAY
+            origin.patch_evolution_party(
+                ov_data[battle_ov], overlays[battle_ov].ramAddress,
+                meta["symbols"]["OneScreen_OriginEvolutionPartyMon"])
+            extra_overlays.append(battle_ov)
+            log("  Evolution: bound the post-battle scan to occupied party slots")
             apps = origin.app_table(arm9, overlays)
             hook_sites = dict(site=origin.MAIN_LOOP_SITE,
                               orig_fn=origin.ORIG_LOOP_FN)
@@ -172,10 +178,19 @@ def patch(rom_bytes: bytes, log=print, auto_battle=True,
             values["origin_menu_flag"] = 0
             values["origin_cursor"] = 0
             values["origin_state"] = 0
-            values["origin_submenu"] = 0
+            values["origin_battle_data"] = 0
+            # Retail reads its prompt and CANCEL state from BattleInput.
+            values["origin_prompt_cursor"] = 0
+            values["origin_cancel_flag"] = 0
+            values["origin_battle_vblank"] = 0
+            values["origin_evo_get_mon"] = 0
+            values["origin_evo_done"] = 0
             # The start menu's struct is the retail one, offsets and all.
             values["startmenu_state_off"] = 0x26
             values["startmenu_inhibit_off"] = 0x34C
+            # Origin's Oak speech app has no exec pointer in an ARM9 template,
+            # so the retail build has nothing to record there.
+            values["origin_oak_exec_orig"] = 0
             # Take over these apps' exec pointers in their OverlayManagerTemplates,
             # so the hook is handed &proc_state - the screen level - every frame
             # instead of having to find the manager in RAM. The templates live in
