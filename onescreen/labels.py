@@ -91,12 +91,6 @@ GRID_BASE_COL = 13
 WIN_STRIDE = 27
 WIN_BASE_TILE = 31
 
-# Origin fits the entire question on its first line. Reserve that line for
-# the game, including long Pokémon names. Commands occupy the second line.
-ORIGIN_COLS = WIN_STRIDE
-ORIGIN_ROWS = GRID_ROWS // 2
-ORIGIN_BASE_TILE = WIN_BASE_TILE + ORIGIN_ROWS * WIN_STRIDE
-
 # The yes/no prompt gets its own, much smaller box. It cannot reuse the command
 # grid: the blit paints its whole area, including the paper between the words, so
 # a 14-tile-wide box wipes out the right-hand end of a question that is long
@@ -418,14 +412,9 @@ class Box:
     `base_tile`. The window's lines are 27 tiles wide and start at tile 31, so
     `base_tile` is 31 for its first line and 31 + 27*n for the nth.
 
-    The two builds need different boxes, and the reason is in the prompt.
-    Retail HGSS prints "What will <NAME> do?" on TWO lines - the name wraps
-    onto the second - so the only free space in the window is its right-hand
-    columns, and the commands go there in the game's own 2x3 cursor arrangement
-    (FIGHT across the top, BAG/RUN/POKEMON along the bottom).
-
-    Origin HeartGold prints the entire question on the first line. Its
-    commands share the second line, below the Pokémon's full name.
+    Retail HGSS and Origin HeartGold place the commands in the same right-hand
+    columns, following the game's cursor grid (FIGHT across the top,
+    BAG/RUN/POKEMON along the bottom).
     """
 
     __slots__ = ("cols", "rows", "base_col", "base_tile", "layout")
@@ -449,7 +438,7 @@ class Box:
 
 
 RETAIL_BOX = Box(GRID_COLS, GRID_ROWS, GRID_BASE_COL, WIN_BASE_TILE, "retail")
-ORIGIN_BOX = Box(ORIGIN_COLS, ORIGIN_ROWS, 0, ORIGIN_BASE_TILE, "origin")
+ORIGIN_BOX = Box(GRID_COLS, GRID_ROWS, GRID_BASE_COL, WIN_BASE_TILE, "origin")
 
 BLOB_MAGIC = b"1SLB"
 
@@ -852,13 +841,6 @@ def _layout_row(font: Font, items, cell_w):
         out.append((x, 0, codes, (x - gap // 2, 0, w + gap, ROW_H)))
         x += w + gap
     return out
-
-
-def _layout_origin_commands(font, commands, width):
-    """Keep BAG, RUN/CANCEL and POKéMON in order, with FIGHT near the centre."""
-    fight, bag, pokemon, run = commands
-    bag, fight, run, pokemon = _layout_row(font, [bag, fight, run, pokemon], width)
-    return [fight, bag, pokemon, run]
 
 
 def _render(font: Font, placed, selected, width=CELL_W, height=CELL_H,
@@ -1457,9 +1439,8 @@ def build(rom, log=print, theme=themes.DEFAULT_THEME, overlays=None, mf=None,
     `mf` says where this ROM keeps its message files, for a ROM that
     renumbered them - see MessageFiles.
 
-    `box` says where the four battle commands go - see Box. The default is the
-    retail one; a ROM whose battle prompt leaves a whole line of the message
-    window free gets ORIGIN_BOX instead.
+    `box` says where the four battle commands go and which menus the ROM uses.
+    Origin uses the retail grid with an additional cursor position for INFO.
 
     `layout_overlays` says which overlays hold the game's own touch-menu
     layout table - see touch_layouts_in. The default is the retail one.
@@ -1511,17 +1492,10 @@ def build(rom, log=print, theme=themes.DEFAULT_THEME, overlays=None, mf=None,
     # those concepts separate lets the field yes/no geometry alias the battle
     # yes/no images without copying them into the blob a second time. Every set
     # is banded: one plain image and a rectangle per choice.
-    if box.layout == "retail":
-        command_layout = _layout(font, labels)
-        command_choices = 4
-    else:
-        # Origin's command menu has a fifth position - INFO, above FIGHT - which
-        # the game's cursor can sit on. It has no word of its own, so that choice
-        # gets an empty rectangle.
-        command_layout = _layout_origin_commands(font, labels, box.width)
-        command_choices = 5
+    # Origin's fifth cursor position, INFO above FIGHT, has an empty band.
+    command_choices = 4 if box.layout == "retail" else 5
     sets = [
-        (command_layout, command_choices, box.width, box.cols, box.rows, True),
+        (_layout(font, labels), command_choices, box.width, box.cols, box.rows, True),
         (_layout_yesno(font, choices), 2, YN_CELL_W, YN_COLS, GRID_ROWS, True),
         # Oak's two prompts used to invert - white ink, no shadow - because the
         # band was whatever saturated colour his intro happened to be using, and
@@ -1557,8 +1531,7 @@ def build(rom, log=print, theme=themes.DEFAULT_THEME, overlays=None, mf=None,
         return out
 
     extra_layouts = {
-        "cancel": lambda: (_layout(font, words(CANCEL_MSGS)) if box.layout == "retail"
-                           else _layout_origin_commands(font, words(CANCEL_MSGS), box.width)),
+        "cancel": lambda: _layout(font, words(CANCEL_MSGS)),
         "safari": lambda: _layout(font, words(SAFARI_MSGS)),
         "bug": lambda: _layout(font, words(BUG_MSGS)),
         "park": lambda: _layout_sparse(font, *words(PARK_MSGS)),
@@ -1576,21 +1549,13 @@ def build(rom, log=print, theme=themes.DEFAULT_THEME, overlays=None, mf=None,
             continue
         try:
             placed = extra_layouts[name]()
-            if box.layout == "retail":
-                _banded_set(font, placed, CELL_W, GRID_COLS)
-                spec = (placed, 4, CELL_W, GRID_COLS, GRID_ROWS, True)
-            else:
-                # Origin's command menu has a fifth choice - INFO, which has no
-                # word of its own - and the CANCEL variant has the same shape.
-                _banded_set(font, placed, box.width, box.cols, box.rows,
-                            command_choices)
-                spec = (placed, command_choices, box.width, box.cols,
-                        box.rows, True)
+            _banded_set(font, placed, box.width, box.cols, box.rows,
+                        command_choices)
         except (LabelError, IndexError, KeyError) as exc:
             extra_missing.append(f"{name} ({exc})")
             geometries.append((None, battle_rows))
             continue
-        sets.append(spec)
+        sets.append((placed, command_choices, box.width, box.cols, box.rows, True))
         geometries.append((len(sets) - 1, battle_rows))
 
     if oak_gender_rows is not None:

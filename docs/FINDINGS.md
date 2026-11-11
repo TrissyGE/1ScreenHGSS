@@ -2101,13 +2101,11 @@ INFO, above FIGHT, which has no word of its own. The game moves the cursor with 
 and draws its own touch buttons on the bottom screen, so the hook only mirrors it: the
 words go on the top screen, in the message window, and the band follows the cursor.
 
-**The message window is where retail puts it.** Origin prints the battle prompt on one
-line where retail wraps onto two, and it prints it on the window's *first* text line. The
-window's content rows are 27 tiles apart - two of them to a text line - so its lines sit
-at tiles 31/58, 85/112 and 139/166, and the second one is free. The commands go into the
-window's right-hand columns, fourteen tiles wide, exactly where retail puts them: FIGHT
-across the top line, BAG/RUN/POKéMON along the bottom. Origin moves its cursor in the same
-2x3 grid, so a single row of four would make "up" jump sideways.
+**The message window is where retail puts it.** The commands occupy the right-hand
+fourteen tile columns. FIGHT sits above BAG, RUN and POKéMON, following the game's
+2x3 cursor grid. The second battler in doubles gets CANCEL in the RUN position.
+Origin prints its question on one line, so a question that reaches the right-hand
+columns can be clipped by the commands.
 
 **Its palette blink is the same fight as retail's, and retail's fix does not reach it.**
 The band is palette 11's colour 12, the salmon `0x62FF` (#f8b8c0) the battle scene keeps

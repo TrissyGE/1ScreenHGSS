@@ -168,10 +168,11 @@ the code it patches.
 
 What is ported and **play-tested** so far:
 
-- the **battle command menu**: The commands fit below the full question, and
-  the highlight follows the D-Pad. In doubles, the second Pokémon gets
-  **CANCEL** in place of **RUN**. The move list, target grid, bag and party
-  appear on top while active, and the battle scene returns when they close.
+- the **battle command menu**: As in retail, **FIGHT** sits above **BAG**,
+  **RUN** and **POKéMON**. The highlight follows the D-Pad. In doubles, the
+  second Pokémon gets **CANCEL** in place of **RUN**. The move list, target
+  grid, bag and party appear on top while active, and the battle scene
+  returns when they close.
 - **Battle questions**: The switch prompt and the move-learning questions
   mirror the native Yes / No selection. Accepting opens the relevant Pokémon
   or move list on the top screen.
